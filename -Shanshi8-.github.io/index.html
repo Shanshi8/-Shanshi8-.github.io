@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ka">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ხელფასის გადასახადის კალკულატორი</title>
+    <link rel="manifest" href="/manifest.json" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+
+        function filledCell(cell) {
+            return cell !== '' && cell != null;
+        }
+
+        function loadFileData(filename) {
+            if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+                try {
+                    var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                    var firstSheetName = workbook.SheetNames[0];
+                    var worksheet = workbook.Sheets[firstSheetName];
+                    var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                    var filteredData = jsonData.filter(row => row.some(filledCell));
+                    var headerRowIndex = filteredData.findIndex((row, index) =>
+                        row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                    );
+                    if (headerRowIndex === -1 || headerRowIndex > 25) {
+                        headerRowIndex = 0;
+                    }
+                    var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex));
+                    csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                    return csv;
+                } catch (e) {
+                    console.error(e);
+                    return "";
+                }
+            }
+            return gk_fileData[filename] || "";
+        }
+    </script>
+</head>
+
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-lg shadow-lg p-6 max-w-md w-full">
+        <h1 class="text-2xl font-bold text-gray-800 mb-4 text-center">ხელფასის გადასახადის კალკულატორი</h1>
+        <!-- Input Section -->
+        <div class="mb-6">
+            <label for="grossSalary" class="block text-gray-700 font-medium mb-2">
+                მთლიანი ხელფასი (₾)
+            </label>
+            <div class="relative">
+                <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500">₾</span>
+                <input type="number" id="grossSalary" step="0.01" min="0" placeholder="შეიყვანეთ მთლიანი ხელფასი"
+                    class="w-full pl-8 pr-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    aria-describedby="grossSalaryError" />
+            </div>
+            <p id="grossSalaryError" class="text-red-500 text-sm mt-1 hidden">
+                გთხოვთ, შეიყვანოთ სწორი ხელფასი (0 ან მეტი).
+            </p>
+        </div>
+        <!-- Results Section -->
+        <div class="space-y-4">
+            <div class="flex justify-between text-gray-700">
+                <span>საშემოსავლო გადასახადი (20%):</span>
+                <span id="incomeTax" class="text-red-500">₾0.00</span>
+            </div>
+            <div class="flex justify-between text-gray-700">
+                <span>საპენსიო შენატანი (2%):</span>
+                <span id="pension" class="text-red-500">₾0.00</span>
+            </div>
+            <div class="flex justify-between font-semibold text-gray-800">
+                <span>ჯამური გამოქვითვები:</span>
+                <span id="totalDeductions" class="text-red-500">₾0.00</span>
+            </div>
+            <div class="flex justify-between font-bold text-lg">
+                <span>წმინდა ხელფასი:</span>
+                <span id="netSalary" class="text-green-500">₾0.00</span>
+            </div>
+        </div>
+        <!-- Chart Section -->
+        <div class="mt-6">
+            <canvas id="salaryChart" class="w-full" height="200"></canvas>
+        </div>
+        <!-- Summary Section -->
+        <div class="mt-6 text-sm text-gray-600">
+            <p><strong>გადასახადის განაკვეთები:</strong></p>
+            <p>საპენსიო შენატანი: 2% მთლიანი ხელფასიდან</p>
+            <p>საშემოსავლო გადასახადი: 20% (მთლიანი ხელფასი - საპენსიო შენატანი)</p>
+            <p>ჯამური გამოქვითვის განაკვეთი: <span id="totalDeductionRate">0%</span></p>
+        </div>
+    </div>
+    <script>
+        const grossSalaryInput = document.getElementById('grossSalary');
+        const incomeTaxEl = document.getElementById('incomeTax');
+        const pensionEl = document.getElementById('pension');
+        const totalDeductionsEl = document.getElementById('totalDeductions');
+        const netSalaryEl = document.getElementById('netSalary');
+        const totalDeductionRateEl = document.getElementById('totalDeductionRate');
+        const errorEl = document.getElementById('grossSalaryError');
+
+        // Chart setup
+        const ctx = document.getElementById('salaryChart').getContext('2d');
+        const salaryChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: ['წმინდა ხელფასი', 'საშემოსავლო გადასახადი', 'საპენსიო შენატანი'],
+                datasets: [{
+                    data: [0, 0, 0],
+                    backgroundColor: ['#10B981', '#EF4444', '#F59E0B'],
+                    borderWidth: 1,
+                }],
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                    },
+                },
+            },
+        });
+
+        function formatCurrency(amount) {
+            return `₾${parseFloat(amount).toFixed(2).replace(/\d(?=(\d{3})+\.)/g, '$&,')}`;
+        }
+
+        function calculateTaxes(gross) {
+            const pension = gross * 0.02;
+            const taxableIncome = gross - pension;
+            const incomeTax = taxableIncome * 0.20;
+            const totalDeductions = incomeTax + pension;
+            const netSalary = gross - totalDeductions;
+            const totalDeductionRate = gross > 0 ? (totalDeductions / gross * 100).toFixed(2) : 0;
+
+            return { incomeTax, pension, totalDeductions, netSalary, totalDeductionRate };
+        }
+
+        function updateResults(gross) {
+            const { incomeTax, pension, totalDeductions, netSalary, totalDeductionRate } = calculateTaxes(gross);
+
+            incomeTaxEl.textContent = formatCurrency(incomeTax);
+            pensionEl.textContent = formatCurrency(pension);
+            totalDeductionsEl.textContent = formatCurrency(totalDeductions);
+            netSalaryEl.textContent = formatCurrency(netSalary);
+            totalDeductionRateEl.textContent = `${totalDeductionRate}%`;
+
+            // Update chart
+            salaryChart.data.datasets[0].data = [netSalary, incomeTax, pension];
+            salaryChart.update();
+        }
+
+        grossSalaryInput.addEventListener('input', () => {
+            const gross = parseFloat(grossSalaryInput.value) || 0;
+
+            if (gross < 0) {
+                errorEl.classList.remove('hidden');
+                grossSalaryInput.classList.add('border-red-500');
+                updateResults(0);
+            } else {
+                errorEl.classList.add('hidden');
+                grossSalaryInput.classList.remove('border-red-500');
+                updateResults(gross);
+            }
+        });
+
+        // Initialize with 0
+        updateResults(0);
+
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js');
+        }
+    </script>
+</body>
+
+</html>
